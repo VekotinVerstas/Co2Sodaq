@@ -181,7 +181,7 @@ void loop()
     }
     // Delay between readings
     // 60 000 = 1 minute
-    delay(60000); 
+    delay(300000); 
 }
 
 String getObject()
@@ -191,26 +191,32 @@ String getObject()
   int co2, temp;
   String lorastr;
     
-  DynamicJsonBuffer jsonBuffer(200);
-  JsonObject& root = jsonBuffer.createObject();
+
   
     
     if (read_temp_co2(&co2, &temp)) {
         debugSerial.println("*********************************************************************");
         debugSerial.print("CO2:");
         debugSerial.println(co2, DEC);
+        debugSerial.print("Temperature(MHZ19): ");
+        debugSerial.println(temp);
         debugSerial.print("Temperature(DHT11): ");
         debugSerial.println(Temp, 2);
         debugSerial.print("Humidity(DHT11): ");
         debugSerial.println(hum, 2);
         debugSerial.println("*********************************************************************");
-                
-    }
-//String CeeOo2 = co2;
 
-root["CO2"] = co2;
-root["Temp"] = Temp;
-root["Humd"] = hum;
+DynamicJsonBuffer jsonBuffer(200);
+JsonObject& root = jsonBuffer.createObject();
+
+root["id"] = "SODAQ_BOARD";
+root["sensor"] = "BKS";
+
+JsonObject& data = root.createNestedObject("data");
+data["co2"] = co2;
+data["temp1"] = temp;
+data["temp2"] = Temp;
+data["hum"] = hum;
 
 root.printTo(lorastr);
 debugSerial.println(lorastr);
@@ -218,7 +224,7 @@ digitalWrite(LED_BUILTIN, HIGH);
 delay(1000);
 digitalWrite(LED_BUILTIN, LOW);
 delay(1000);
-
+    }
 return lorastr;  
 } 
 
