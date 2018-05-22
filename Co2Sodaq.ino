@@ -1,3 +1,6 @@
+#include <Wire.h>
+#include <SPI.h>
+
 #include <ArduinoJson.h>
 
 #include <DHT.h>
@@ -8,17 +11,41 @@
 
 #include "mhz19.h"
 
+#include <Adafruit_BME280.h>
+#include <Adafruit_Sensor.h>
+
+Adafruit_BME280 bme;
+
 #define debugSerial SerialUSB
 #define loraSerial Serial2
 #define mhzpins Serial
 
-#define DHTPIN 7    
+#define DHTPIN 7
 #define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE); //// Initialize DHT sensor for normal 16mhz Arduino
 
 #define NIBBLE_TO_HEX_CHAR(i) ((i <= 9) ? ('0' + i) : ('A' - 10 + i))
 #define HIGH_NIBBLE(i) ((i >> 4) & 0x0F)
 #define LOW_NIBBLE(i) (i & 0x0F)
+
+#define SENSOR_USE 1  //if SENSOR_USE is 1, then it uses BME, if 0, it uses DHT
+
+void bmestart(/*unsigned pin1, unsigned pin2*/) {
+  /*bme.setSampling(Adafruit_BME280::MODE_FORCED,
+                    Adafruit_BME280::SAMPLING_X1, // temperature
+                    Adafruit_BME280::SAMPLING_NONE, // pressure
+                    Adafruit_BME280::SAMPLING_X1, // humidity
+                    Adafruit_BME280::FILTER_OFF   );
+  */
+  bool bmestatus;
+  //13, 15 
+  Wire.begin();
+  bmestatus = bme.begin(0x76);
+  if (!bmestatus) {
+    Serial.println("Could not find a valid BME280 sensor, check wiring!");
+    while (1);
+  }
+}
 
 //Use OTAA, set to false to use ABP
 bool OTAA = false;
@@ -33,51 +60,52 @@ const uint8_t AppKey[16] =
 
 static bool exchange_command(uint8_t cmd, uint8_t data[], int timeout)
 {
-    // create command buffer
-    uint8_t buf[9];
-    int len = prepare_tx(cmd, data, buf, sizeof(buf));
+  // create command buffer
+  uint8_t buf[9];
+  int len = prepare_tx(cmd, data, buf, sizeof(buf));
 
-    // send the command
-    mhzpins.write(buf, len);
+  // send the command
+  mhzpins.write(buf, len);
 
-    // wait for response
-    long start = millis();
-    while ((millis() - start) < timeout) {
-        if (mhzpins.available() > 0) {
-            uint8_t b = mhzpins.read();
-            if (process_rx(b, cmd, data)) {
-                return true;
-            }
-        }
+  // wait for response
+  long start = millis();
+  while ((millis() - start) < timeout) {
+    if (mhzpins.available() > 0) {
+      uint8_t b = mhzpins.read();
+      if (process_rx(b, cmd, data)) {
+        return true;
+      }
     }
+  }
 
-    return false;
+  return false;
 }
 
 static bool read_temp_co2(int *co2, int *temp)
 {
-    uint8_t data[] = {0, 0, 0, 0, 0, 0};
-    bool result = exchange_command(0x86, data, 3000);
-    if (result) {
-        *co2 = (data[0] << 8) + data[1];
-        *temp = data[2] - 40;
+  uint8_t data[] = {0, 0, 0, 0, 0, 0};
+  bool result = exchange_command(0x86, data, 3000);
+  if (result) {
+    *co2 = (data[0] << 8) + data[1];
+    *temp = data[2] - 40;
 #if 1
-        char raw[32];
-        sprintf(raw, "RAW: %02X %02X %02X %02X %02X %02X", data[0], data[1], data[2], data[3], data[4], data[5]);
-        Serial.println(raw);
+    char raw[32];
+    sprintf(raw, "RAW: %02X %02X %02X %02X %02X %02X", data[0], data[1], data[2], data[3], data[4], data[5]);
+    Serial.println(raw);
 #endif
-    }
-    return result;
+  }
+  return result;
 }
 
 void setup()
 {
   dht.begin();
   mhzpins.begin(9600);
+  bmestart(/*SDA, SCL*/);
   delay(1000);
   pinMode(LED_BUILTIN, OUTPUT);
-  
-  while ((!debugSerial) && (millis() < 10000)){
+
+  while ((!debugSerial) && (millis() < 10000)) {
     // Wait 10 seconds for debugSerial to open
   }
   debugSerial.println("Start");
@@ -98,13 +126,13 @@ void setup()
     debugSerial.print((char)NIBBLE_TO_HEX_CHAR(HIGH_NIBBLE(DevEUI[i])));
     debugSerial.print((char)NIBBLE_TO_HEX_CHAR(LOW_NIBBLE(DevEUI[i])));
   }
-  debugSerial.println();  
-  
+  debugSerial.println();
+
   setupLoRa();
 }
 
-void setupLoRa(){
-  if(!OTAA){
+void setupLoRa() {
+  if (!OTAA) {
     // ABP
     setupLoRaABP();
   } else {
@@ -113,7 +141,7 @@ void setupLoRa(){
   }
 }
 
-void setupLoRaABP(){  
+void setupLoRaABP() {
   if (LoRaBee.initABP(loraSerial, devAddr, appSKey, nwkSKey, false))
   {
     debugSerial.println("Communication to LoRaBEE successful.");
@@ -124,10 +152,10 @@ void setupLoRaABP(){
   }
 }
 
-void setupLoRaOTAA(){
+void setupLoRaOTAA() {
 
   debugSerial.println(LoRaBee.initOTA(loraSerial, DevEUI, AppEUI, AppKey, false));
-  
+
   if (LoRaBee.initOTA(loraSerial, DevEUI, AppEUI, AppKey, false))
   {
     debugSerial.println("Network connection successful.");
@@ -140,15 +168,17 @@ void setupLoRaOTAA(){
 
 void loop()
 {
-   String reading = getObject();
+  String reading = getObject();
 
-    switch (LoRaBee.send(1, (uint8_t*)reading.c_str(), reading.length()))
-    {
+  switch (LoRaBee.send(1, (uint8_t*)reading.c_str(), reading.length()))
+  {
     case NoError:
       debugSerial.println("Successful transmission.");
       break;
     case NoResponse:
       debugSerial.println("There was no response from the device.");
+      //setupLoRa();
+      //hardwareReset();
       break;
     case Timeout:
       debugSerial.println("Connection timed-out. Check your serial connection to the device! Sleeping for 20sec.");
@@ -160,6 +190,7 @@ void loop()
     case InternalError:
       debugSerial.println("Oh No! This shouldn't happen. Something is really wrong! The program will reset the RN module.");
       setupLoRa();
+      //hardwareReset();
       break;
     case Busy:
       debugSerial.println("The device is busy. Sleeping for 10 extra seconds.");
@@ -168,68 +199,80 @@ void loop()
     case NetworkFatalError:
       debugSerial.println("There is a non-recoverable error with the network connection. The program will reset the RN module.");
       setupLoRa();
+      //hardwareReset();
       break;
     case NotConnected:
       debugSerial.println("The device is not connected to the network. The program will reset the RN module.");
       setupLoRa();
+      //hardwareReset();
       break;
     case NoAcknowledgment:
       debugSerial.println("There was no acknowledgment sent back!");
       break;
     default:
+      setupLoRa();
+      //hardwareReset();
       break;
-    }
-    // Delay between readings
-    // 60 000 = 1 minute
-    delay(300000); 
+  }
+  // Delay between readings
+  // 60 000 = 1 minute
+  delay(300000);
 }
 
 String getObject()
 {
-  float Temp = dht.readTemperature();
-  float hum = dht.readHumidity();
+
+  float Temp;
+  float hum;
   int co2, temp;
   String lorastr;
-    
 
-  
-    
-    if (read_temp_co2(&co2, &temp)) {
-        debugSerial.println("*********************************************************************");
-        debugSerial.print("CO2:");
-        debugSerial.println(co2, DEC);
-        debugSerial.print("Temperature(MHZ19): ");
-        debugSerial.println(temp);
-        debugSerial.print("Temperature(DHT11): ");
-        debugSerial.println(Temp, 2);
-        debugSerial.print("Humidity(DHT11): ");
-        debugSerial.println(hum, 2);
-        debugSerial.println("*********************************************************************");
 
-DynamicJsonBuffer jsonBuffer(200);
-JsonObject& root = jsonBuffer.createObject();
+  if (SENSOR_USE == 1) {
+    Temp = bme.readTemperature();
+    hum = bme.readHumidity();
+  }
+  else {
+    float Temp = dht.readTemperature();
+    float hum = dht.readHumidity();
+  }
 
-root["id"] = "SODAQ_BOARD";
-root["sensor"] = "BKS";
+  if (read_temp_co2(&co2, &temp)) {
+    debugSerial.println("*********************************************************************");
+    debugSerial.print("CO2:");
+    debugSerial.println(co2, DEC);
+    debugSerial.print("Temperature(MHZ19): ");
+    debugSerial.println(temp);
+    debugSerial.print("Temperature(DHT11): ");
+    debugSerial.println(Temp, 2);
+    debugSerial.print("Humidity(DHT11): ");
+    debugSerial.println(hum, 2);
+    debugSerial.println("*********************************************************************");
 
-JsonObject& data = root.createNestedObject("data");
-data["co2"] = co2;
-data["temp1"] = temp;
-data["temp2"] = Temp;
-data["hum"] = hum;
+    DynamicJsonBuffer jsonBuffer(200);
+    JsonObject& root = jsonBuffer.createObject();
 
-root.printTo(lorastr);
-debugSerial.println(lorastr);
-digitalWrite(LED_BUILTIN, HIGH);
-delay(1000);
-digitalWrite(LED_BUILTIN, LOW);
-delay(1000);
-    }
-return lorastr;  
-} 
+    root["id"] = "SDQ_BRD01";
+    root["sensor"] = "BKS";
+
+    JsonObject& data = root.createNestedObject("data");
+    data["co2"] = co2;
+    data["temp1"] = temp;
+    data["temp2"] = Temp;
+    data["hum"] = hum;
+
+    root.printTo(lorastr);
+    debugSerial.println(lorastr);
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(1000);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(1000);
+  }
+  return lorastr;
+}
 
 /**
-* Gets and stores the LoRa module's HWEUI/
+  Gets and stores the LoRa module's HWEUI/
 */
 static void getHWEUI()
 {
